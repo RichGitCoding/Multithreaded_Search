@@ -1,4 +1,5 @@
  use std::io;
+ use walkdir::WalkDir;
  
  fn main() {
     println!("Enter directory path:");
@@ -17,5 +18,13 @@
 
 
     println!("Searching for '{}' in '{}'",keyword, dir_path);
+
+    //Traverse the Directory and print all file paths
+    for entry in WalkDir::new(dir_path)
+        .into_iter().filter_map(Result::ok) {
+            if entry.file_type().is_file() {
+                println!("Found file: {}", entry.path().display());
+            } 
+        }
 
 }
