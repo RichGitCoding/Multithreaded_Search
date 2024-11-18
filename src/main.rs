@@ -1,92 +1,94 @@
- use std::io;
- use walkdir::WalkDir;
- use std::fs::File;
- use std::io::BufRead;
- use std::sync::mpsc;
- use std::thread;
- use std::sync::{Arc, Mutex};
- 
- fn main() {
-    println!("Enter directory path:");
-    
-    let mut dir_path = String::new();
-    io::stdin().read_line(&mut dir_path).unwrap();
-    let dir_path = dir_path.trim();
+use std::io;
+use walkdir::WalkDir;
+use std::fs::File;
+use std::io::BufRead;
+use std::sync::mpsc;
+use std::thread;
+use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 
 
-    //Enter the keywprd to search for
-    println!("Enter the keyword to search for:");
+fn main() {
 
-    let mut keyword = String::new();
-    io::stdin().read_line(&mut keyword).unwrap();
-    let keyword = keyword.trim();
+//Prompt use for directory to search
+let mut dir_path = String::new();
+println!("Please enter a directory to search through: ");
+io::stdin().read_line(&mut dir_path).unwrap();
+let dir_path = dir_path.trim(); //.trim() returns a string that represents a borrowed view
 
-    //Set up channel to communicate between threads
-    let (tx,rx) = mpsc::channel();
+//Prompt user for keyword to search for
+println!("Please enter a keyword to search for:");
+let mut keyword = String::new();
+io::stdin().read_line(&mut keyword).unwrap();
+let keyword = keyword.trim().to_string(); // Trim keyword input and clone it 
 
-    //Allow rx to safely share values
-    let rx = Arc::new(Mutex::new(rx));
+//Create a channel tx and tx for communication & make safe
+let (tx,rx): (mpsc::Sender<PathBuf>, mpsc::Receiver<PathBuf>) = mpsc::channel();
+let rx = Arc::new(Mutex::new(rx));  
 
-    println!("Searching for '{}' in '{}'",keyword, dir_path);
+//Create vector to store thread handles
+let num_threads = 4;
+let mut handles: Vec<thread::JoinHandle<()>> = vec![]; 
 
-    // Traverse the directory and search each file
-    for entry in WalkDir::new(dir_path) {
-        match entry {
-            Ok(entry) => {
-                if entry.file_type().is_file() {
-                    let file_path = entry.path();
-                    println!("Searching in file: {}", file_path.display());
+//Spawn worker threads and clone the rx and keywords for the threads
+for _ in 0..num_threads{
+    let rx = Arc::clone(&rx);
+    let keyword = keyword.clone();
 
-                    // Open the file
-                    let file = File::open(file_path);
-                    match file {
-                        Ok(file) => {
-                            let reader = io::BufReader::new(file);
-                            let mut line_number = 1;
-
-                            // Iterate over each line in the file
-                            for line in reader.lines() {
-                                match line {
-                                    Ok(line) => {
-                                        if line.contains(keyword) {
-                                            println!("Found in {} (Line {}): {}", file_path.display(), line_number, line);
-                                        }
-                                    }
-                                    Err(_) => eprintln!("Error reading line in file: {}", file_path.display()),
-                                }
-                                line_number += 1;
-                            }
-                        }
-                        Err(_) => eprintln!("Error opening file: {}", file_path.display()),
-                    }
-                }
-            }
-            Err(_) => eprintln!("Error reading entry in directory: {}", dir_path),
+    let handle = thread::spawn(move || {
+        while let Ok(file_path) = rx.lock().unwrap().recv() {
+            search_file(&file_path, &keyword); //search for the word in the file
         }
+    });
+
+    handles.push(handle);
+}
+
+//Traverse the directory
+for entry in WalkDir::new(dir_path) {
+    match entry {
+        Ok(entry) if entry.file_type().is_file() => {
+            let file_path = entry.path().to_path_buf(); // Clone the path
+            if tx.send(file_path).is_err() {
+                eprintln!("Error sending file path to worker");
+            }
+        }
+        Err(e) => eprintln!("Error reading directory entry: {}", e),
+        _ => {} // Ignore other cases (directories, etc.)
     }
 }
-// START program
 
-// PROMPT user for directory path and keyword to search
+    drop(tx);
 
-// INITIALIZE a thread-safe queue to store file paths
-// INITIALIZE a channel for threads to send search results to the main thread
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
 
-// SPAWN a thread for directory traversal:
-//     RECURSIVELY traverse the given directory
-//     FOR each file found:
-//         ADD file path to the queue
+fn search_file(file_path: &PathBuf, keyword: &str) {
+    println!("Searching in file: {:?}", file_path); // Print the file being searched
 
-// SPAWN multiple worker threads:
-//     WHILE queue is not empty:
-//         POP a file path from the queue
-//         READ the file contents
-//         SEARCH for the keyword in each line
-//         SEND results (file name and line numbers) back to the main thread via channel
+    match File::open(file_path) {
+        Ok(file) => {
+            let reader = io::BufReader::new(file);
+            let mut line_number = 1;
 
-// COLLECT results in the main thread:
-//     DISPLAY the file names and line numbers where the keyword was found
+            for line in reader.lines() {
+                match line {
+                    Ok(line) if line.contains(keyword) => { // If line contains the keyword
+                        println!("Found '{}' in {} (Line {}): {}", keyword, file_path.display(), line_number, line);
+                    }
+                    Err(_) => eprintln!("Error reading line in file: {}", file_path.display()),
+                    _ => {}
+                }
+                line_number += 1;
+            }
+        }
+        Err(_) => eprintln!("Error opening file: {}", file_path.display()),
+    }
+}
 
-// WAIT for all threads to finish
 
-// END program
+
+
+
